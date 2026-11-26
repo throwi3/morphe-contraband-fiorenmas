@@ -1,5 +1,20 @@
 [
-Hide Shorts app shortcut| true
-Hide Shorts widget button| true
-Material You| true
+  {
+    "patches": {
+      "Hide Shorts app shortcut": {
+        "enabled": true,
+        }
+      }
+      "patches": {
+      "Hide Shorts widget button": {
+        "enabled": true,
+        }
+      }
+        "patches": {
+      "Material You": {
+        "enabled": true,
+        }
+      }
+    }
+  }
 ]
