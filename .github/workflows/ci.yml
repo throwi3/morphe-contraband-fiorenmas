@@ -17,25 +17,30 @@ jobs:
       - name: Check github connection
         id: check-gh
         run: bash src/etc/connection.sh
-      - name: Check new patch Reseam
-        id: check-reseam
+      - name: Check new patch HushTumblr
+        id: check-hushtumblr
         if: steps.check-gh.outputs.internet_error == '0'
-        run: bash src/etc/ci.sh Reseam/patches latest youtube-reseam.apk
+        run: bash src/etc/ci.sh SysAdminDoc/Hushtumblr latest tumblr-arm64-v8a-hushfacebook.apk
       - name: Check new patch Venus
         id: check-venus
         if: steps.check-gh.outputs.internet_error == '0'
         run: bash src/etc/ci.sh VenusIsJaded/Venus-Patches latest discord-venus.apk
+      - name: Check new patch Reseam
+        id: check-reseam
+        if: steps.check-gh.outputs.internet_error == '0'
+        run: bash src/etc/ci.sh Reseam/patches latest youtube-reseam.apk
     outputs:
-      check_reseam: ${{ steps.check-reseam.outputs.new_patch }}
+      check_hushtumblr: ${{ steps.check-hushtumblr.outputs.new_patch }}
       check_venus: ${{ steps.check-venus.outputs.new_patch }}
-  Patch-Reseam:
-    name: Patch Reseam
+      check_reseam: ${{ steps.check-reseam.outputs.new_patch }}
+  Patch-hush-tumblr:
+    name: Patch HushTumblr
     needs: check
-    if: ${{ needs.check.outputs.check_reseam == 1 }}
+    if: ${{ needs.check.outputs.check_hushtumblr == 1 }}
     uses: ./.github/workflows/manual-patch.yml
     secrets: inherit
     with:
-      org: "Reseam"
+      org: "HushTumblr"
   Patch-Venus:
     name: Patch Venus
     needs: check
@@ -44,3 +49,11 @@ jobs:
     secrets: inherit
     with:
       org: "Venus"
+  Patch-Reseam:
+    name: Patch Reseam
+    needs: check
+    if: ${{ needs.check.outputs.check_reseam == 1 }}
+    uses: ./.github/workflows/manual-patch.yml
+    secrets: inherit
+    with:
+      org: "Reseam"
