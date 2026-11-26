@@ -7,5 +7,5 @@ dl_gh "Hushtumblr" "SysAdminDoc" "latest"
 #################################################
 # Patch Tumblr:
 get_patches_key "HushTumblr"
-get_apk "com.tumblr" "tumblr-arm64-v8a" "bundle" "arm64-v8a" "480dpi" "Android 11+"
-patch "tumblr-arm64-v8a" "hushTumblr"
+get_apk "com.tumblr" "tumblr" "bundle"
+patch "tumblr" "hushTumblr"
