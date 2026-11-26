@@ -1,3 +1,2 @@
-Hide Shorts app shortcut| true
-Hide Shorts widget button| true
-Material You| true
+Hide Shorts components| -OhideShortsAppShortcut=true -OhideShortsWidget=true
+Theme| -OmaterialYou=true
