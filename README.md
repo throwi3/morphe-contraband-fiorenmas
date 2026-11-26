@@ -2,28 +2,21 @@
 <h4 align="center">
 There are many open-source scripts for patching various apps like YouTube, YouTube Music... However, they are very difficult to use for most users. That's why I created this repository that allows users to download those apps easily.
 </h4>
-<div align="center">
-  
-</div>
 
----
+----
 
-## ⚙️ How does this repository work?
-All you need to do is choose the app you want to use from the options below: 'Revanced' or 'Revanced Extended'. Then, select your phone's CPU architecture. If you don't know what your phone's CPU architecture is, choose Universal. That's all there is to it.
+##  How does this repository work?
+
+This repository does not create new releases; it only releases new files.
+
+All the code is open-source, and the APK files used for patching are downloaded from a trusted site, so it is safe for you to use.
 
 > [!NOTE]
 > If you want to use YouTube, YouTube Music, or Google Photos, you need to download and install [MicroG RE](https://github.com/MorpheApp/MicroG-RE)
->
-> This repository does not create new releases; it only releases new files.
->
-> All the code is open-source, and the APK files used for patching are downloaded from a trusted site, so it is safe for you to use.
----
 
----
+----
 
----
-
-### ⚠️ Libraries and resources used in this repository:
+###  Libraries and resources used in this repository:
 
 <details>
   <summary>inotia00</summary>
