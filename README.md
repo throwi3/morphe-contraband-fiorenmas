@@ -3,7 +3,8 @@
 There are many open-source scripts for patching various apps like YouTube, YouTube Music... However, they are very difficult to use for most users. That's why I created this repository that allows users to download those apps easily.
 </h4>
 
-###  How does this repository work?
+---
+##  How does this repository work?
 
 This repository does not create new releases; it only releases new files.
 
@@ -12,7 +13,8 @@ All the code is open-source, and the APK files used for patching are downloaded 
 > [!NOTE]
 > If you want to use YouTube, YouTube Music, or Google Photos, you need to download and install [MicroG RE](https://github.com/MorpheApp/MicroG-RE)
 
-###  Libraries and resources used in this repository:
+---
+##Libraries and resources used in this repository:
 
 <details>
   <summary>inotia00</summary>
