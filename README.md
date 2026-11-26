@@ -4,25 +4,9 @@ There are many open-source scripts for patching various apps like YouTube, YouTu
 </h4>
 <div align="center">
   
-[![Image of https://github.com/FiorenMas/Revanced-And-Revanced-Extended-Non-Root](https://github.com/FiorenMas/View-Counter/blob/main/repos/Revanced-And-Revanced-Extended-Non-Root_609906498/svg/count.svg)](https://github.com/FiorenMas/View-Counter)
-[![Image of https://github.com/FiorenMas/Revanced-And-Revanced-Extended-Non-Root/actions](https://img.shields.io/github/actions/workflow/status/fiorenmas/Revanced-And-Revanced-Extended-Non-Root/ci.yml)](https://github.com/FiorenMas/Revanced-And-Revanced-Extended-Non-Root/actions)
-[![](https://img.shields.io/badge/Telegram-2CA5E0)](https://t.me/fiorenmas)
-  
 </div>
 
 ---
-
-> [!NOTE]
-> ## Backup Telegram channel: 
-> ### [https://t.me/fiorenmas](https://t.me/fiorenmas)
-
-> [!IMPORTANT]
-> ### Vietnamese "devs" listed below:
-> [haidayne](https://github.com/haidayne) ([@AnhsNguyetj](https://t.me/AnhsNguyetj)) and [soctrungkien](https://github.com/soctrungkien) ([@realknoname](https://t.me/realknoname)) 
->
-> Stole my friend [gnadgnaoh's code](https://github.com/gnadgnaoh/SexAlloy) without crediting him and then sold it as a product in their telegram channel "Cộng đồng Android Việt Nam". [Fully detailed report linked here](https://github.com/gnadgnaoh/ZaloXposed) 
->
-> Don't use their mods as they didn't support the original code author and are unethical people.
 
 ## ⚙️ How does this repository work? <img src="../main/docs/image/Readme.png" align="right" />
 All you need to do is choose the app you want to use from the options below: 'Revanced' or 'Revanced Extended'. Then, select your phone's CPU architecture. If you don't know what your phone's CPU architecture is, choose Universal. That's all there is to it.
