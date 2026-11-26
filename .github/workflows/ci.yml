@@ -33,7 +33,7 @@ jobs:
     needs: check
     if: ${{ needs.check.outputs.check_reseam == 1 }}
     uses: ./.github/workflows/manual-patch.yml
-    secrets: inherit
+#    secrets: inherit
     with:
       org: "Reseam"
   Patch-Venus:
@@ -41,6 +41,6 @@ jobs:
     needs: check
     if: ${{ needs.check.outputs.check_venus == 1 }}
     uses: ./.github/workflows/manual-patch.yml
-    secrets: inherit
+#    secrets: inherit
     with:
       org: "Venus"
