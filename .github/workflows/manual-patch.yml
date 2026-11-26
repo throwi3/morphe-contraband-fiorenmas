@@ -14,8 +14,9 @@ on:
         default: 'Reseam'
         type: choice
         options:
-          - 'Reseam'
+          - 'HushTumblr'
           - 'Venus'
+          - 'Reseam'
   workflow_call:
     inputs:
       org:
@@ -25,6 +26,46 @@ on:
       TDL_BACKUP:
         required: true
 jobs:
+  patch_hush_tumblr:
+    name: Patch HushTumblr
+    if: ${{ github.event.inputs.org == 'HushTumblr' || inputs.org == 'HushTumblr' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+      - name: Preparing to patch
+        uses: ./.github/actions/preparing
+      - name: Check github connection
+        id: check-gh-hushtumblr
+        run: bash src/etc/connection.sh
+      - name: Patch apk
+        id: patch-hushtumblr
+        if: steps.check-gh-hushtumblr.outputs.internet_error == '0'
+        run: bash src/build/HushTumblr.sh
+      - name: Releasing APK files
+        id: release-hushtumblr
+        if: steps.check-gh-hushtumblr.outputs.internet_error == '0'
+        uses: ./.github/actions/release
+  patch_venus:
+    name: Patch Venus
+    if: ${{ github.event.inputs.org == 'Venus' || inputs.org == 'Venus' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+      - name: Preparing to patch
+        uses: ./.github/actions/preparing
+      - name: Check github connection
+        id: check-gh-venus
+        run: bash src/etc/connection.sh
+      - name: Patch apk
+        id: patch-venus
+        if: steps.check-gh-venus.outputs.internet_error == '0'
+        run: bash src/build/venus.sh
+      - name: Releasing APK files
+        id: release-venus
+        if: steps.check-gh-venus.outputs.internet_error == '0'
+        uses: ./.github/actions/release
   patch_reseam:
     name: Patch Reseam
     if: ${{ github.event.inputs.org == 'Reseam' || inputs.org == 'Reseam' }}
@@ -48,24 +89,4 @@ jobs:
       - name: Releasing APK files
         id: release-reseam
         if: steps.check-gh-reseam.outputs.internet_error == '0'
-        uses: ./.github/actions/release
-  patch_venus:
-    name: Patch Venus
-    if: ${{ github.event.inputs.org == 'Venus' || inputs.org == 'Venus' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6.0.2
-      - name: Preparing to patch
-        uses: ./.github/actions/preparing
-      - name: Check github connection
-        id: check-gh-venus
-        run: bash src/etc/connection.sh
-      - name: Patch apk
-        id: patch-venus
-        if: steps.check-gh-venus.outputs.internet_error == '0'
-        run: bash src/build/venus.sh
-      - name: Releasing APK files
-        id: release-venus
-        if: steps.check-gh-venus.outputs.internet_error == '0'
         uses: ./.github/actions/release
