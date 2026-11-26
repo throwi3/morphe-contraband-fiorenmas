@@ -14,7 +14,7 @@ All the code is open-source, and the APK files used for patching are downloaded 
 > If you want to use YouTube, YouTube Music, or Google Photos, you need to download and install [MicroG RE](https://github.com/MorpheApp/MicroG-RE)
 
 ---
-##Libraries and resources used in this repository:
+## Libraries and resources used in this repository:
 
 <details>
   <summary>inotia00</summary>
