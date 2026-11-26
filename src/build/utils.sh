@@ -1,0 +1,1243 @@
+#!/bin/bash
+
+mkdir ./release ./download
+
+#Setup pup for download apk files
+wget -q -O ./pup.zip https://github.com/ericchiang/pup/releases/download/v0.4.0/pup_v0.4.0_linux_amd64.zip
+unzip "./pup.zip" -d "./" > /dev/null 2>&1
+pup="./pup"
+#Setup APKEditor for install combine split apks
+wget -q -O ./APKEditor.jar https://github.com/REAndroid/APKEditor/releases/download/V1.4.9/APKEditor-1.4.9.jar
+APKEditor="./APKEditor.jar"
+#Seed user_agent; replaced at runtime by the UA of whichever CF bypass service answered
+user_agent=$(wget -qO- --timeout=15 --tries=1 https://www.whatismybrowser.com/guides/the-latest-user-agent/firefox | tr '\n' ' ' | sed 's#</tr>#\n#g' | grep 'Firefox (Standard)' | sed -n 's/.*<span class="code">\([^<]*Android[^<]*\)<\/span>.*/\1/p') \
+|| user_agent=
+[ -z "$user_agent" ] && {
+  user_agent='Mozilla/5.0 (Android 16; Mobile; rv:146.0) Gecko/146.0 Firefox/146.0'
+  echo "[-] Can't found lastest user-agent"
+}
+
+#################################################
+
+# Colored output logs
+green_log() {
+    echo -e "\e[32m$1\e[0m"
+}
+red_log() {
+    echo -e "\e[31m$1\e[0m"
+}
+yellow_log() {
+    echo -e "\e[33m$1\e[0m"
+}
+
+#################################################
+
+# Download Github assets requirement:
+dl_gh() {
+  if [ $3 == "prerelease" ]; then
+    local repo=$1
+    for repo in $1 ; do
+      local owner=$2 tag=$3 found=0 assets=0
+      releases=$(wget -qO- "https://api.github.com/repos/$owner/$repo/releases")
+      while read -r line; do
+        if [[ $line == *"\"tag_name\":"* ]]; then
+          tag_name=$(echo $line | cut -d '"' -f 4)
+          if [ "$tag" == "latest" ] || [ "$tag" == "prerelease" ]; then
+            found=1
+          else
+            found=0
+          fi
+        fi
+        if [[ $line == *"\"prerelease\":"* ]]; then
+          prerelease=$(echo $line | cut -d ' ' -f 2 | tr -d ',')
+          if [ "$tag" == "prerelease" ] && [ "$prerelease" == "true" ] ; then
+            found=1
+          elif [ "$tag" == "prerelease" ] && [ "$prerelease" == "false" ]; then
+            found=1
+          fi
+        fi
+        if [[ $line == *"\"assets\":"* ]]; then
+          if [ $found -eq 1 ]; then
+            assets=1
+          fi
+        fi
+        if [[ $line == *"\"browser_download_url\":"* ]]; then
+          if [ $assets -eq 1 ]; then
+            url=$(echo $line | cut -d '"' -f 4)
+            if [[ $url != *.asc ]]; then
+              name=$(basename "$url")
+              wget -q -O "$name" "$url"
+              green_log "[+] Downloading $name from $owner"
+            fi
+          fi
+        fi
+        if [[ $line == *"],"* ]]; then
+          if [ $assets -eq 1 ]; then
+            assets=0
+            break
+          fi
+        fi
+      done <<< "$releases"
+    done
+  else
+    for repo in $1 ; do
+      tags=$( [ "$3" == "latest" ] && echo "latest" || echo "tags/$3" )
+      wget -qO- "https://api.github.com/repos/$2/$repo/releases/$tags" \
+        | jq -r '.assets[] | "\(.browser_download_url) \(.name)"' \
+        | while read -r url names; do
+          if [[ $url != *.asc ]]; then
+            if [[ "$3" == "latest" && "$names" == *dev* ]]; then
+              continue
+            fi
+            green_log "[+] Downloading $names from $2"
+            wget -q -O "$names" $url
+          fi
+        done
+    done
+  fi
+}
+
+dl_gl() {
+  local repo=$1 owner=$2 tag=${3:-latest}
+  local project_path="${owner}%2F${repo}"
+  local api_url="https://gitlab.com/api/v4/projects/${project_path}/releases"
+
+  local releases
+  releases=$(wget -qO- "$api_url")
+
+  local release
+  if [[ "$tag" == "latest" ]]; then
+    release=$(echo "$releases" | jq -r '[.[] | select(.tag_name | test("-dev") | not)][0]')
+  elif [[ "$tag" == "prerelease" ]]; then
+    release=$(echo "$releases" | jq -r '[.[] | select(.tag_name | test("-dev"))][0]')
+  else
+    release=$(wget -qO- "$api_url/$tag")
+  fi
+
+  if [[ -z "$release" ]] || [[ "$release" == "null" ]]; then
+    red_log "[-] No matching release found for $owner/$repo ($tag)"
+    return 1
+  fi
+
+  local tag_name
+  tag_name=$(echo "$release" | jq -r '.tag_name')
+
+  echo "$release" | jq -r '.assets.links[] | "\(.direct_asset_url // .url) \(.name)"' | \
+    while read -r url name; do
+      if [[ -n "$url" ]] && [[ "$url" != "null" ]] && [[ $url != *.asc ]]; then
+        green_log "[+] Downloading $name from $owner"
+        wget -q -O "$name" "$url"
+      fi
+    done
+}
+
+#################################################
+
+# Get patches list:
+get_patches_key() {
+	excludePatches=""
+	includePatches=""
+	keepPrefix=""
+	exclusivePatches=""
+	excludeLinesFound=false
+	includeLinesFound=false
+
+	local patchDir="src/patches/$1"
+	local patch_name line1 line2
+
+	sed -i 's/\r$//' "$patchDir/include-patches"
+	sed -i 's/\r$//' "$patchDir/exclude-patches"
+	if [ -f "$patchDir/keep-prefix" ]; then
+		sed -i 's/\r$//' "$patchDir/keep-prefix"
+		keepPrefix=$(grep -m1 -v '^[[:space:]]*$' "$patchDir/keep-prefix" | sed 's/[[:space:]]*$//')
+	fi
+
+	while IFS= read -r line1 || [[ -n "$line1" ]]; do
+		[[ -z "$line1" ]] && continue
+		excludePatches+=" -d \"$line1\""
+		excludeLinesFound=true
+	done < "$patchDir/exclude-patches"
+
+	while IFS= read -r line2 || [[ -n "$line2" ]]; do
+		[[ -z "$line2" ]] && continue
+		patch_name="${line2%%|*}"
+		includePatches+=" -e \"$patch_name\""
+		includeLinesFound=true
+	done < "$patchDir/include-patches"
+
+	if [ "$excludeLinesFound" = false ]; then
+		excludePatches=""
+	fi
+	if [ "$includeLinesFound" = false ]; then
+		includePatches=""
+	fi
+
+	if [ -f "$patchDir/exclusive" ]; then
+		sed -i 's/\r$//' "$patchDir/exclusive"
+		case "$(grep -m1 -v '^[[:space:]]*$' "$patchDir/exclusive" | tr -d '[:space:]')" in
+			1|true|yes|on) exclusivePatches=" --exclusive" ;;
+		esac
+	fi
+	if [ -n "$exclusivePatches" ] && [ "$includeLinesFound" = false ]; then
+		yellow_log "[!] exclusive is on but include-patches is empty, ignoring: $1"
+		exclusivePatches=""
+	fi
+
+	export excludePatches
+	export includePatches
+	export keepPrefix
+	export exclusivePatches
+}
+
+#################################################
+
+_req() {
+    local cookie_args=()
+    [[ -n "$FS_COOKIES" ]] && cookie_args=(--header "Cookie: $FS_COOKIES")
+    if [ "$2" = "-" ]; then
+        wget -nv -O "$2" --header="User-Agent: $user_agent" --header="Content-Type: application/octet-stream" --header="Accept-Language: en-US,en;q=0.9" --header="Connection: keep-alive" --header="Upgrade-Insecure-Requests: 1" --header="Cache-Control: max-age=0" --header="Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8" "${cookie_args[@]}" --keep-session-cookies --timeout=30 "$1" || rm -f "$2"
+    else
+        wget -nv -O "./download/$2" --header="User-Agent: $user_agent" --header="Content-Type: application/octet-stream" --header="Accept-Language: en-US,en;q=0.9" --header="Connection: keep-alive" --header="Upgrade-Insecure-Requests: 1" --header="Cache-Control: max-age=0" --header="Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8" "${cookie_args[@]}" --keep-session-cookies --timeout=30 "$1" || rm -f "./download/$2"
+    fi
+}
+req() {
+    _req "$1" "$2"
+}
+
+detect_version_morphe() {
+	if [ -z "$version" ] && [ "$lock_version" != "1" ]; then
+	  local morphe_jar="morphe-desktop-" mpp_glob="*.mpp"
+
+	  if [[ $(ls "${morphe_jar}"*.jar 2>/dev/null) =~ ${morphe_jar}([0-9]+) ]]; then
+	    local list_patches_flags="list-patches --with-packages --with-versions --with-options --patches"
+	    version=$(java -jar "${morphe_jar}"*.jar $list_patches_flags $mpp_glob | awk -v pkg="$1" '
+		  BEGIN { found = 0; printing = 0 }
+		  /^Index:/ { if (printing) exit; found = 0 }
+		  /Package name: / { if (printing && $3 != pkg) exit; if ($3 == pkg) found = 1 }
+		  /Compatible versions:/ { if (found) printing = 1; next }
+		  printing && $1 ~ /^[0-9]+\./ { print $1 }
+		' | sort -V | tail -n1)
+	  else
+	    yellow_log "[!] ${morphe_jar}*.jar not found, cannot detect version from *.mpp"
+	  fi
+	fi
+}
+
+detect_version_reseam() {
+	if [ -z "$version" ] && [ "$lock_version" != "1" ]; then
+	  local reseam_cli="./reseam-linux-x64" patches_bundle
+	  patches_bundle=$(ls ./*.reseam 2> /dev/null | head -n1)
+	  [ -z "$patches_bundle" ] && { red_log "[-] No .reseam patch bundle found"; return 1; }
+	  [ -f "$reseam_cli" ] || { red_log "[-] Reseam CLI not found: $reseam_cli"; return 1; }
+	  chmod +x "$reseam_cli" 2> /dev/null
+
+	  version=$("$reseam_cli" bundle list "$patches_bundle" --json 2> /dev/null | jq -r --arg pkg "$1" '
+		[.patches[] | (.compatibility.packages // [])[] | select(.package == $pkg) | .versions[] | split(" ")[0]]
+		| unique | .[]
+	  ' 2> /dev/null | sort -V | tail -n1)
+
+	  if [ -z "$version" ]; then
+	    version=$("$reseam_cli" bundle list "$patches_bundle" 2> /dev/null | awk -v pkg="$1" -F'[()]' '
+		  /packages: / && index($0, " " pkg " (") {
+		    n = split($2, list, ", *")
+		    for (i = 1; i <= n; i++) { split(list[i], part, " "); if (part[1] ~ /^[0-9]/) print part[1] }
+		  }
+		' | sort -V | tail -n1)
+	  fi
+	fi
+}
+
+patch_format() {
+	if [ -n "$(ls ./*.mpp 2> /dev/null | head -n1)" ]; then
+		echo "morphe"
+	elif [ -n "$(ls ./*.reseam 2> /dev/null | head -n1)" ]; then
+		echo "reseam"
+	fi
+}
+
+detect_version() {
+	local patch_type
+	patch_type=$(patch_format)
+	if [ -z "$patch_type" ]; then
+		yellow_log "[!] No .mpp or .reseam patch file found, skipping version detection [$1]"
+	elif [ -n "$version" ] || [ "$lock_version" == "1" ]; then
+		green_log "[+] Using pinned version: $version [$1]"
+	else
+		case "$patch_type" in
+			morphe) detect_version_morphe "$1" ;;
+			reseam) detect_version_reseam "$1" ;;
+		esac
+	fi
+}
+
+_fs_get() {
+	local url=$1
+	local max_retries=3
+	local attempt
+	for attempt in $(seq 1 $max_retries); do
+		local response
+		response=$(curl -s -X POST 'http://localhost:8191/v1' \
+			-H 'Content-Type: application/json' \
+			-d "{\"cmd\":\"request.get\",\"url\":\"$url\",\"maxTimeout\":15000}")
+		local status
+		status=$(echo "$response" | jq -r '.status // empty')
+		if [[ "$status" == "ok" ]]; then
+			html=$(echo "$response" | jq -r '.solution.response // empty')
+			export FS_COOKIES
+			FS_COOKIES=$(echo "$response" | jq -r '[.solution.cookies[] | .name + "=" + .value] | join("; ")')
+			local fs_ua
+			fs_ua=$(echo "$response" | jq -r '.solution.userAgent // empty')
+			[[ -n "$fs_ua" ]] && user_agent="$fs_ua"
+			return 0
+		fi
+		yellow_log "[!] FlareSolverr attempt $attempt/$max_retries failed: $url"
+		sleep 5
+	done
+	red_log "[-] FlareSolverr failed after $max_retries attempts: $url"
+	return 1
+}
+
+_cfb_get() {
+	local url=$1
+	local max_retries=3
+	local attempt
+
+	for attempt in $(seq 1 $max_retries); do
+		local response_file
+		rm -f /tmp/cfb_response_headers.txt
+		response_file=$(mktemp)
+		local http_code
+		http_code=$(curl -s -o "$response_file" -w '%{http_code}' \
+			-D /tmp/cfb_response_headers.txt \
+			-G --data-urlencode "url=$url" \
+			--max-time 120 \
+			"http://localhost:8000/html")
+		if [[ "$http_code" == "200" ]]; then
+			html=$(cat "$response_file")
+			if [[ -n "$html" ]]; then
+				export FS_COOKIES
+				FS_COOKIES=$(grep -i '^x-cf-bypasser-cookies:' /tmp/cfb_response_headers.txt 2>/dev/null | cut -d':' -f2- | xargs)
+				local cfb_ua
+				cfb_ua=$(grep -i '^x-cf-bypasser-user-agent:' /tmp/cfb_response_headers.txt 2>/dev/null | cut -d':' -f2- | xargs)
+				[[ -n "$cfb_ua" ]] && user_agent="$cfb_ua"
+				rm -f "$response_file" /tmp/cfb_response_headers.txt
+				return 0
+			fi
+		else
+			yellow_log "[!] CFB attempt $attempt/$max_retries: HTTP $http_code: $url"
+		fi
+	done
+	return 1
+}
+
+_FFS_FAILED=0
+
+_cf_get() {
+	if [[ "$_FFS_FAILED" -eq 0 ]]; then
+		_fs_get "$@" && return 0
+		yellow_log "[!] FlareSolverr failed, falling back to CFB"
+		_FFS_FAILED=1
+	fi
+	_cfb_get "$@"
+}
+
+_is_archive() {
+	local f=$1 magic
+	[[ -s "$f" ]] || return 1
+	magic=$(head -c 4 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')
+	[[ "$magic" == "504b0304" || "$magic" == "504b0506" ]]
+}
+
+get_apk() {
+	local pkg_name=$1 apk_name=$2
+	local pkg_type=${3:-apk} arch=${4:-} dpi=${5:-} minver=${6:-}
+	local allow_near_version=${near_version:-0}
+	unset near_version
+	local base_url="https://www.apkmirror.com"
+	local html=""
+
+	local apps_json="./src/build/helper/apps.json"
+	local list_url
+	local example_urls=()
+	list_url=$(jq -r --arg pkg "$pkg_name" '.apkmirror[$pkg].list_url // empty' "$apps_json")
+	while IFS= read -r example_url; do
+		[[ -n "$example_url" ]] && example_urls+=("$example_url")
+	done < <(jq -r --arg pkg "$pkg_name" '.apkmirror[$pkg] | .example_url, .example_url2 // empty' "$apps_json")
+
+	if [[ -z "$list_url" ]]; then
+		red_log "[-] Package $pkg_name not found in apps.json"
+		return 1
+	fi
+
+	local base_apk
+	if [[ "$pkg_type" == "bundle" ]] || [[ "$pkg_type" == "bundle_extract" ]]; then
+		base_apk="$apk_name.apkm"
+	else
+		base_apk="$apk_name.apk"
+	fi
+
+	detect_version "$pkg_name"
+	version=$(printf '%s\n' "$version" "$prefer_version" | sort -V | tail -n1)
+	unset prefer_version
+	export version
+
+	green_log "[+] Detected version: ${version:-latest} [$pkg_name]"
+	green_log "[+] Downloading $apk_name (type=$pkg_type arch=${arch:-any} dpi=$dpi)"
+
+	local version_href=""
+
+	if [[ ${#example_urls[@]} -gt 0 && -n "$version" ]]; then
+		local example_url slug_ver target_ver
+		for example_url in "${example_urls[@]}"; do
+			version_href="${example_url#$base_url}"
+			slug_ver=$(echo "$version_href" | grep -oP '\d+(-\d+)+' | tail -1)
+			target_ver=$(echo "$version" | tr '.' '-' | grep -oP '\d+(-\d+)+')
+			if [[ -n "$slug_ver" ]]; then
+				version_href="${version_href/$slug_ver/$target_ver}"
+			fi
+
+			echo "$base_url$version_href"
+			if _cf_get "$base_url$version_href" && [[ "$html" != *"Page Not Found"* && "$html" != *"404 Whoops"* ]]; then
+				break
+			fi
+			version_href=""
+		done
+	fi
+
+	if [[ -z "$version_href" ]]; then
+		_cf_get "$list_url" || return 1
+
+		version_href=$(echo "$html" | $pup 'h5.appRowTitle a.fontBlack json{}' | \
+			jq -r '.[] | select(.text | test("(?i)beta|alpha") | not) | .href' | head -1)
+		[[ -z "$version_href" ]] && \
+			version_href=$(echo "$html" | $pup 'h5.appRowTitle a.fontBlack attr{href}' | head -1)
+
+		if [[ -z "$version_href" ]]; then
+			red_log "[-] Could not find release on APKMirror"
+			return 1
+		fi
+
+		if [[ -n "$version" ]]; then
+			local slug_ver
+			slug_ver=$(echo "$version_href" | grep -oP '\d+(-\d+)+' | tail -1)
+			local target_ver
+			target_ver=$(echo "$version" | tr '.' '-' | grep -oP '\d+(-\d+)+')
+			if [[ -n "$slug_ver" ]]; then
+				version_href="${version_href/$slug_ver/$target_ver}"
+			fi
+		fi
+
+		echo "$base_url$version_href"
+
+		_cf_get "$base_url$version_href" || return 1
+	fi
+
+	if [[ "$html" == *"Page Not Found"* ]] || [[ "$html" == *"404 Whoops"* ]]; then
+		yellow_log "[!] Version page not found, searching uploads pages..."
+		local target_ver_dot="$version"
+		local near_version_href="" near_version_value=""
+		version_href=""
+		for page_num in $(seq 1 10); do
+			local page_url="$list_url"
+			if [[ $page_num -gt 1 ]]; then
+				page_url="${list_url%%\?*}/page/$page_num/?${list_url#*\?}"
+			fi
+			_cf_get "$page_url" || return 1
+			if [[ -n "$target_ver_dot" ]]; then
+				version_href=$(echo "$html" | $pup 'h5.appRowTitle a.fontBlack json{}' | \
+					jq -r --arg v "$target_ver_dot" '.[] | select(.text | contains($v)) | .href' | head -1)
+				if [[ -z "$version_href" && "$allow_near_version" == "1" ]]; then
+					local release_text release_href release_version
+					while IFS=$'\t' read -r release_text release_href; do
+						release_version=$(echo "$release_text" | grep -oP '\d+(\.\d+)+' | tail -1)
+						[[ -z "$release_version" ]] && continue
+						if [[ "$(printf '%s\n' "$release_version" "$target_ver_dot" | sort -V | tail -n1)" == "$target_ver_dot" && "$release_version" != "$target_ver_dot" ]]; then
+							if [[ -z "$near_version_value" || "$(printf '%s\n' "$near_version_value" "$release_version" | sort -V | tail -n1)" == "$release_version" ]]; then
+								near_version_value="$release_version"
+								near_version_href="$release_href"
+							fi
+						fi
+					done < <(echo "$html" | $pup 'h5.appRowTitle a.fontBlack json{}' | \
+						jq -r '.[] | select(.text | test("(?i)beta|alpha") | not) | [.text, .href] | @tsv')
+				fi
+			else
+				version_href=$(echo "$html" | $pup 'h5.appRowTitle a.fontBlack json{}' | \
+					jq -r '.[] | select(.text | test("(?i)beta|alpha") | not) | .href' | head -1)
+			fi
+			[[ -n "$version_href" ]] && break
+		done
+		if [[ -z "$version_href" && -n "$near_version_href" ]]; then
+			version_href="$near_version_href"
+			version="$near_version_value"
+			export version
+			yellow_log "[!] Exact version $target_ver_dot unavailable; using nearest lower version $version"
+		fi
+		if [[ -z "$version_href" ]]; then
+			red_log "[-] Could not find version on APKMirror"
+			return 1
+		fi
+		echo "$base_url$version_href"
+		_cf_get "$base_url$version_href" || return 1
+	fi
+
+	local type_badge="APK"
+	[[ "$pkg_type" == "bundle" || "$pkg_type" == "bundle_extract" ]] && type_badge="BUNDLE"
+
+	local vtable_html rows variant_href=""
+	vtable_html=$(echo "$html" | $pup 'div.variants-table')
+	rows=$(echo "$vtable_html" | tr '\n' ' ' | sed 's/<div class="table-row/\n<div class="table-row/g')
+
+	local dpi_fallback=("120-640dpi" "120-480dpi" "480-640dpi" "480dpi")
+	local type_attempts=("$type_badge")
+	if [[ "$type_badge" == "BUNDLE" ]]; then
+		type_attempts+=("APK")
+	else
+		type_attempts+=("BUNDLE")
+	fi
+
+	local matched_type=""
+	local variant_page_loaded=false
+	for try_type in "${type_attempts[@]}"; do
+		local filtered_rows
+		filtered_rows=$(echo "$rows" | grep -iP "apkm-badge[^>]*>\s*$try_type\s*<")
+		[[ -n "$arch" ]] && filtered_rows=$(echo "$filtered_rows" | grep -i "$arch")
+		[[ -n "$minver" ]] && filtered_rows=$(echo "$filtered_rows" | grep -i "$minver")
+
+		if [[ -n "$dpi" ]]; then
+			local dpi_filtered
+			dpi_filtered=$(echo "$filtered_rows" | grep -i "$dpi")
+			if [[ -z "$dpi_filtered" ]]; then
+				for fb_dpi in "${dpi_fallback[@]}"; do
+					dpi_filtered=$(echo "$filtered_rows" | grep -i "$fb_dpi")
+					[[ -n "$dpi_filtered" ]] && { yellow_log "[!] DPI fallback: $dpi -> $fb_dpi"; break; }
+				done
+			fi
+			filtered_rows="$dpi_filtered"
+		fi
+
+		variant_href=$(echo "$filtered_rows" | grep -oP 'accent_color[^>]*href="\K[^"]+' | head -1)
+		if [[ -n "$variant_href" ]]; then
+			matched_type="$try_type"
+			[[ "$try_type" != "$type_badge" ]] && yellow_log "[!] Type fallback: $type_badge -> $try_type"
+			break
+		fi
+	done
+
+	if [[ -z "$variant_href" ]]; then
+		local direct_apk_href
+		direct_apk_href=$(echo "$html" | $pup 'a.downloadButton attr{href}' | grep 'forcebaseapk' | head -1)
+		if [[ -n "$direct_apk_href" && -z "$arch" && -z "$dpi" && -z "$minver" ]]; then
+			matched_type="APK"
+			variant_page_loaded=true
+			[[ "$type_badge" != "APK" ]] && yellow_log "[!] Type fallback: $type_badge -> APK"
+			yellow_log "[!] APKMirror redirected directly to the APK download page"
+		else
+			red_log "[-] Could not find variant (type=$type_badge arch=${arch:-any} dpi=$dpi)"
+			return 1
+		fi
+	fi
+	if [[ "$variant_page_loaded" == false ]]; then
+		variant_href=$(echo "$variant_href" | sed 's/&amp;/\&/g')
+		echo "$base_url$variant_href"
+	fi
+
+	if [[ "$matched_type" == "BUNDLE" ]]; then
+		base_apk="$apk_name.apkm"
+	else
+		base_apk="$apk_name.apk"
+	fi
+
+	if [[ "$variant_page_loaded" == false ]]; then
+		_cf_get "$base_url$variant_href" || return 1
+	fi
+
+	local dl_btn_href
+	local all_dl_btns
+	all_dl_btns=$(echo "$html" | $pup 'a.downloadButton attr{href}')
+	if [[ "$matched_type" == "BUNDLE" ]]; then
+		dl_btn_href=$(echo "$all_dl_btns" | grep -v 'forcebaseapk' | head -1)
+		[[ -z "$dl_btn_href" ]] && dl_btn_href=$(echo "$all_dl_btns" | head -1)
+	else
+		dl_btn_href=$(echo "$all_dl_btns" | grep 'forcebaseapk' | head -1)
+		[[ -z "$dl_btn_href" ]] && dl_btn_href=$(echo "$all_dl_btns" | head -1)
+	fi
+
+	if [[ -z "$dl_btn_href" ]]; then
+		red_log "[-] Could not find download button"
+		return 1
+	fi
+	dl_btn_href=$(echo "$dl_btn_href" | sed 's/&amp;/\&/g')
+
+	_cf_get "$base_url$dl_btn_href" || return 1
+
+	local final_href
+	final_href=$(echo "$html" | $pup 'a#download-link attr{href}' | head -1)
+	[[ -z "$final_href" ]] && \
+		final_href=$(echo "$html" | grep -oP 'id="download-link"[^>]*href="\K[^"]+' | head -1)
+
+	if [[ -z "$final_href" ]]; then
+		red_log "[-] Could not find final download link"
+		return 1
+	fi
+	final_href=$(echo "$final_href" | sed 's/&amp;/\&/g')
+
+	echo "$base_url$final_href"
+
+	local dl_ok=0 attempt
+	for attempt in 1 2 3; do
+		local cookie_args=()
+		[[ -n "$FS_COOKIES" ]] && cookie_args=(--header "Cookie: $FS_COOKIES")
+		rm -f "./download/$base_apk"
+		wget -nv -O "./download/$base_apk" \
+			--header="User-Agent: $user_agent" \
+			--header="Accept: */*" \
+			--referer="$base_url$dl_btn_href" \
+			"${cookie_args[@]}" \
+			--timeout=120 \
+			"$base_url$final_href"
+
+		if _is_archive "./download/$base_apk"; then
+			dl_ok=1
+			break
+		fi
+
+		yellow_log "[!] Download attempt $attempt/3 returned invalid content (Cloudflare), refreshing session"
+		rm -f "./download/$base_apk"
+		_cf_get "$base_url$dl_btn_href" || return 1
+		final_href=$(echo "$html" | $pup 'a#download-link attr{href}' | head -1)
+		[[ -z "$final_href" ]] && \
+			final_href=$(echo "$html" | grep -oP 'id="download-link"[^>]*href="\K[^"]+' | head -1)
+		if [[ -z "$final_href" ]]; then
+			red_log "[-] Could not find final download link"
+			return 1
+		fi
+		final_href=$(echo "$final_href" | sed 's/&amp;/\&/g')
+	done
+
+	if [[ "$dl_ok" -eq 1 ]]; then
+		green_log "[+] Successfully downloaded $apk_name"
+	else
+		red_log "[-] Failed to download $apk_name"
+		return 1
+	fi
+
+	if [[ "$matched_type" == "BUNDLE" ]]; then
+		if [[ "$pkg_type" == "bundle_extract" && "$type_badge" == "BUNDLE" ]]; then
+			unzip "./download/$base_apk" -d "./download/$(basename "$base_apk" .apkm)" > /dev/null 2>&1
+		else
+			green_log "[+] Merge splits apk to standalone apk"
+			java -jar $APKEditor m -i "./download/$apk_name.apkm" -o "./download/$apk_name.apk" > /dev/null 2>&1
+		fi
+	fi
+}
+
+get_apkpure() {
+	local pkg_name=$1 apk_name=$2 pkg_type=${3:-apk}
+	local html=""
+
+	local apps_json="./src/build/helper/apps.json"
+	local base_download_url
+	base_download_url=$(jq -r --arg pkg "$pkg_name" '.apkpure[$pkg].download_url // empty' "$apps_json")
+
+	if [[ -z "$base_download_url" ]]; then
+		red_log "[-] Package $pkg_name not found in apps.json (apkpure)"
+		return 1
+	fi
+
+	detect_version "$pkg_name"
+	version=$(printf '%s\n' "$version" "$prefer_version" | sort -V | tail -n1)
+	unset prefer_version
+	export version
+
+	if [[ "$pkg_type" == "bundle" ]] || [[ "$pkg_type" == "bundle_extract" ]]; then
+		local base_apk="$apk_name.xapk"
+	else
+		local base_apk="$apk_name.apk"
+	fi
+
+	local dl_page_url
+	if [[ -n "$version" ]]; then
+		dl_page_url="${base_download_url%/}/$version"
+	else
+		dl_page_url="$base_download_url"
+	fi
+
+	green_log "[+] Downloading $apk_name from APKPure (type=$pkg_type)"
+	echo "$dl_page_url"
+
+	_cf_get "$dl_page_url" || return 1
+
+	if [[ -z "$version" ]]; then
+		version=$(echo "$html" | $pup 'h2 text{}' | grep -oP '\d+(\.\d+)+' | head -1)
+	fi
+	green_log "[+] Version: $version"
+
+	local download_url
+	download_url=$(echo "$html" | $pup 'a#download_link attr{href}' | head -1)
+	[[ -z "$download_url" ]] && \
+		download_url=$(echo "$html" | grep -oP '<a[^>]+id="download_link"[^>]+href="\Khttps://[^"]+' | head -1)
+
+	if [[ -z "$download_url" ]]; then
+		red_log "[-] Could not find download link on APKPure"
+		return 1
+	fi
+	echo "$download_url"
+
+	local dl_ok=0 attempt
+	for attempt in 1 2 3; do
+		local cookie_args=()
+		[[ -n "$FS_COOKIES" ]] && cookie_args=(--header "Cookie: $FS_COOKIES")
+		rm -f "./download/$base_apk"
+		wget -nv -O "./download/$base_apk" \
+			--header="User-Agent: $user_agent" \
+			--header="Accept: */*" \
+			--referer="$dl_page_url" \
+			"${cookie_args[@]}" \
+			--timeout=120 \
+			"$download_url"
+
+		if _is_archive "./download/$base_apk"; then
+			dl_ok=1
+			break
+		fi
+
+		yellow_log "[!] Download attempt $attempt/3 returned invalid content (Cloudflare), refreshing session"
+		rm -f "./download/$base_apk"
+		_cf_get "$dl_page_url" || return 1
+		download_url=$(echo "$html" | $pup 'a#download_link attr{href}' | head -1)
+		[[ -z "$download_url" ]] && \
+			download_url=$(echo "$html" | grep -oP '<a[^>]+id="download_link"[^>]+href="\Khttps://[^"]+' | head -1)
+		if [[ -z "$download_url" ]]; then
+			red_log "[-] Could not find download link on APKPure"
+			return 1
+		fi
+	done
+
+	if [[ "$dl_ok" -eq 1 ]]; then
+		green_log "[+] Successfully downloaded $apk_name"
+	else
+		red_log "[-] Failed to download $apk_name"
+		return 1
+	fi
+	if [[ "$pkg_type" == "bundle" ]]; then
+		if unzip -l "./download/$base_apk" 2>/dev/null | grep -q '\.apk$'; then
+			green_log "[+] Merge splits apk to standalone apk"
+			if ! java -jar $APKEditor m -i "./download/$apk_name.xapk" -o "./download/$apk_name.apk" > /dev/null 2>&1; then
+				red_log "[-] Failed to merge $apk_name.xapk to standalone apk"
+				return 1
+			fi
+		elif unzip -l "./download/$base_apk" 2>/dev/null | grep -q 'AndroidManifest.xml'; then
+			green_log "[+] File is already a standalone APK, renaming"
+			mv "./download/$base_apk" "./download/$apk_name.apk"
+		else
+			red_log "[-] Unknown file format for $base_apk"
+			return 1
+		fi
+	elif [[ "$pkg_type" == "bundle_extract" ]]; then
+		unzip "./download/$base_apk" -d "./download/$(basename "$base_apk" .xapk)" > /dev/null 2>&1
+	fi
+}
+
+# Download APK from Google Play Store via AuroraStore anonymous auth
+get_apk_chplay() {
+	local pkg_name=$1 apk_name=$2
+	local pkg_type=${3:-apk} dispenser_url=${4:-}
+
+	local helper_script="./src/build/helper/ggplay_dl/ggplay_dl.py"
+
+	green_log "[+] Downloading $apk_name from Google Play (Ch Play) [$pkg_name]"
+
+	local dispenser_arg=""
+	[[ -n "$dispenser_url" ]] && dispenser_arg="--dispenser $dispenser_url"
+
+	local result
+	result=$(python "$helper_script" "$pkg_name" "./download/$apk_name.apk" $dispenser_arg 2>&1)
+	local exit_code=$?
+
+	local logs
+	logs=$(echo "$result" | grep -v '^{' | grep -v '^}')
+	local json_result
+	json_result=$(echo "$result" | grep '^{')
+
+	if [[ $exit_code -ne 0 ]]; then
+		red_log "[-] Failed to download $apk_name from Google Play"
+		[[ -n "$logs" ]] && echo "$logs" >&2
+		return 1
+	fi
+
+	local success
+	success=$(echo "$json_result" | jq -r '.success // false' 2>/dev/null)
+	if [[ "$success" != "true" ]]; then
+		local error_msg
+		error_msg=$(echo "$json_result" | jq -r '.error // "Unknown error"' 2>/dev/null)
+		red_log "[-] Download failed: $error_msg"
+		return 1
+	fi
+
+	local dl_size
+	dl_size=$(echo "$json_result" | jq -r '.size // 0' 2>/dev/null)
+	local is_split
+	is_split=$(echo "$json_result" | jq -r '.isSplit // false' 2>/dev/null)
+
+	green_log "[+] Successfully downloaded $apk_name (${dl_size} bytes)"
+
+	if [[ "$is_split" == "true" ]]; then
+		if [[ "$pkg_type" == "bundle_extract" ]]; then
+			green_log "[+] Extracting split APKs"
+			unzip "./download/$apk_name.apk" -d "./download/$apk_name" > /dev/null 2>&1
+		else
+			green_log "[+] Merging split APKs to standalone apk"
+			java -jar $APKEditor m -i "./download/$apk_name.apk" -o "./download/$apk_name.apk.merged" > /dev/null 2>&1
+			if [[ -f "./download/$apk_name.apk.merged" ]]; then
+				mv "./download/$apk_name.apk.merged" "./download/$apk_name.apk"
+			fi
+		fi
+	fi
+}
+
+# Download files from Telegram channel/group
+# Required secret in github setting TDL_BACKUP base64 backup file from https://docs.iyear.me/tdl/more/cli/tdl_backup/
+# You must login your telegram (recommend use clone account) before backup https://docs.iyear.me/tdl/getting-started/quick-start/#login
+telegram_dl() {
+	local chat_id="$1" num_posts="$2" file_pattern="$3" out_name="$4"
+
+	if [[ ! -f "./tdl" ]]; then
+		green_log "[+] Downloading tdl from iyear"
+		local tdl_url
+		tdl_url=$(wget -qO- "https://api.github.com/repos/iyear/tdl/releases/latest" \
+			| jq -r '.assets[] | select(.name | test("Linux_64bit\\.tar\\.gz$")) | .browser_download_url')
+		wget -q -O ./tdl.tar.gz "$tdl_url"
+		if [[ ! -f "./tdl.tar.gz" ]]; then
+			red_log "[-] Failed to download tdl"
+			return 1
+		fi
+		tar -xzf ./tdl.tar.gz tdl
+		rm -f ./tdl.tar.gz
+		chmod +x ./tdl
+	fi
+
+	echo "$TDL_BACKUP" | base64 -d > ./backup.tdl
+	./tdl recover --file ./backup.tdl > /dev/null 2>&1
+	rm -f ./backup.tdl
+
+	local ext="${file_pattern##*.}"
+	local filter="Media.Name endsWith '.$ext'"
+
+	green_log "[+] Downloading from Telegram chat $chat_id last $num_posts posts matching '$file_pattern'"
+
+	./tdl chat export -c "$chat_id" -T last -i "$num_posts" -f "$filter" -o ./tg_export.json > /dev/null 2>&1
+	if [[ ! -f "./tg_export.json" ]]; then
+		red_log "[-] Failed to export messages from Telegram"
+		return 1
+	fi
+
+	jq '.messages = [.messages[0]]' ./tg_export.json > ./tg_export_one.json
+	mv ./tg_export_one.json ./tg_export.json
+
+	local tmp_dir="./tg_tmp_$$"
+	mkdir -p "$tmp_dir"
+	./tdl dl -f ./tg_export.json -d "$tmp_dir" > /dev/null 2>&1
+
+	local dl_file
+	dl_file=$(find "$tmp_dir" -type f | head -1)
+	if [[ -n "$dl_file" ]]; then
+		green_log "[+] Downloaded: $(basename "$dl_file")"
+		mv "$dl_file" "./download/$out_name"
+		rm -rf "$tmp_dir" ./tg_export.json
+	else
+		red_log "[-] Telegram download failed"
+		rm -rf "$tmp_dir" ./tg_export.json
+		return 1
+	fi
+}
+
+#################################################
+
+reseam_known_patch() {
+	jq -e --arg n "$2" 'any(.patches[]; .name == $n or .id == $n)' > /dev/null 2>&1 <<< "$1"
+}
+
+reseam_known_option() {
+	jq -e --arg n "$2" --arg k "$3" \
+		'any(.patches[]; (.name == $n or .id == $n) and any(.options[]?; .key == $k))' \
+		> /dev/null 2>&1 <<< "$1"
+}
+
+reseam_catalog() {
+	local bundles=() bundle
+	for bundle in "$@"; do
+		bundles+=("$bundle")
+	done
+	jq -s '{patches: [.[].patches[]]}' < <(
+		for bundle in "${bundles[@]}"; do
+			./reseam-linux-x64 bundle list "$bundle" --json 2> /dev/null
+		done
+	) 2> /dev/null
+}
+
+reseam_selection_args() {
+	local options_file="./src/options/$1.json"
+	local catalog="$2"
+	local kind patch rest args="" enables="" name
+	local exclusive=""
+
+	if ! command -v jq > /dev/null 2>&1; then
+		yellow_log "[!] jq not found, Reseam patch selection left at its defaults" >&2
+		return 0
+	fi
+	if [ -z "$catalog" ]; then
+		red_log "[-] Cannot read the patch list of the Reseam bundle" >&2
+		return 1
+	fi
+
+	while IFS= read -r name; do
+		[ -z "$name" ] && continue
+		if reseam_known_patch "$catalog" "$name"; then
+			enables+=" --enable \"$name\""
+			exclusive=1
+		else
+			yellow_log "[!] Reseam bundle has no patch \"$name\", skipped" >&2
+		fi
+	done < <(printf '%s' "$includePatches" | grep -o '"[^"]*"' | tr -d '"')
+
+	while IFS= read -r name; do
+		[ -z "$name" ] && continue
+		if reseam_known_patch "$catalog" "$name"; then
+			args+=" --disable \"$name\""
+		else
+			yellow_log "[!] Reseam bundle has no patch \"$name\", skipped" >&2
+		fi
+	done < <(printf '%s' "$excludePatches" | grep -o '"[^"]*"' | tr -d '"')
+
+	if [ -f "$options_file" ]; then
+		while IFS=$'\t' read -r kind patch rest; do
+			[ -z "$kind" ] && continue
+			if ! reseam_known_patch "$catalog" "$patch"; then
+				yellow_log "[!] Reseam bundle has no patch \"$patch\", skipped" >&2
+				continue
+			fi
+			case "$kind" in
+				enable)
+					enables+=" --enable \"$patch\""
+					;;
+				disable)
+					args+=" --disable \"$patch\""
+					;;
+				option)
+					if reseam_known_option "$catalog" "$patch" "${rest%%=*}"; then
+						args+=" --option \"$patch.$rest\""
+					else
+						yellow_log "[!] Reseam bundle has no option \"${rest%%=*}\" for \"$patch\", skipped" >&2
+					fi
+					;;
+			esac
+		done < <(jq -r '
+			(if type == "array" then .[] else . end) | (.patches // {}) | to_entries[] | .key as $p
+			| ((.value.options // {}) | to_entries[] | "option\t\($p)\t\(.key)=\(.value | tostring)"),
+			  (select(.value.enabled == true) | "enable\t\($p)\t"),
+			  (select(.value.enabled == false) | "disable\t\($p)\t")
+		' "$options_file" 2> /dev/null)
+	fi
+
+	if [ -n "$exclusive" ] || [ -n "$exclusivePatches" ]; then
+		args=" --preset none$enables$args"
+	else
+		args="$enables$args"
+	fi
+	printf '%s' "$args"
+}
+
+reseam_patch() {
+	local app="$1" options_key="$2" mode="$3" abi="$4"
+	local bundles=() bundle bundle_args="" args trust_args="" trust abi_args="" out rc
+
+	[ -f "./reseam-linux-x64" ] || { red_log "[-] Reseam CLI not found: ./reseam-linux-x64"; exit 1; }
+	[ -f "./src/keystore/reseam.p12" ] || { red_log "[-] Reseam keystore not found: ./src/keystore/reseam.p12"; exit 1; }
+	chmod +x ./reseam-linux-x64 2> /dev/null
+
+	if [ "$mode" = "multi" ]; then
+		for bundle in ./*.reseam; do
+			[ -f "$bundle" ] || continue
+			bundles+=("$bundle")
+		done
+	else
+		bundle=$(ls ./*.reseam 2> /dev/null | head -n1)
+		[ -n "$bundle" ] && bundles+=("$bundle")
+	fi
+	[ ${#bundles[@]} -eq 0 ] && { red_log "[-] No .reseam patch bundle found"; exit 1; }
+
+	for bundle in "${bundles[@]}"; do
+		bundle_args+=" --bundle \"$bundle\""
+		trust=$(./reseam-linux-x64 bundle list "$bundle" 2> /dev/null | sed -n 's/^signer: \([0-9a-fA-F]\{64\}\).*/\1/p' | head -n1)
+		[ -z "$trust" ] && { red_log "[-] Cannot read the signer key of $bundle"; exit 1; }
+		trust_args+=" --trust \"$trust\""
+	done
+
+	out="./release/$app-$options_key.apk"
+	if [ -n "$abi" ]; then
+		abi_args=" --abi \"$abi\""
+		out="./release/$app-$abi-$options_key.apk"
+	fi
+
+	args=$(reseam_selection_args "$options_key" "$(reseam_catalog "${bundles[@]}")") || exit 1
+	eval "./reseam-linux-x64 patch$bundle_args$trust_args$abi_args$args --output \"$out\" --keystore \"./src/keystore/reseam.p12\" --keystore-password \"reseam\" --leave-out-failed \"./download/$app.apk\""
+	rc=$?
+	return $rc
+}
+
+morphe_auto_exclude() {
+	local prefix="$1"
+	shift
+	local bundles=("$@")
+	local key="$prefix|${bundles[*]}"
+	local name pkgs p bundle catalog records family_pkgs=" "
+
+	if [ "$_MORPHE_AUTO_KEY" != "$key" ]; then
+		local list_args=()
+		for bundle in "${bundles[@]}"; do
+			list_args+=("--patches=$bundle")
+		done
+		catalog=$(java -jar morphe-desktop-*.jar list-patches --with-packages "${list_args[@]}" 2> /dev/null)
+		if [ -z "$catalog" ]; then
+			red_log "[-] Cannot read the Morphe patch list" >&2
+			return 1
+		fi
+		records=$(printf '%s\n' "$catalog" | awk '
+			function flush() { if (name != "") print name "\t" pkgs; name = ""; pkgs = "" }
+			/^Index: / { flush(); next }
+			/^Name: / { name = substr($0, 7); next }
+			/^[[:space:]]*Package name: / {
+				p = $0
+				sub(/^[[:space:]]*Package name: /, "", p)
+				sub(/[[:space:]]+$/, "", p)
+				pkgs = (pkgs == "" ? p : pkgs "," p)
+				next
+			}
+			END { flush() }
+		')
+		local -a pkgs_list
+		while IFS=$'\t' read -r name pkgs; do
+			[ -z "$name" ] && continue
+			case "$name" in "$prefix"*) ;; *) continue ;; esac
+			IFS=',' read -r -a pkgs_list <<< "$pkgs"
+			for p in "${pkgs_list[@]}"; do
+				case "$family_pkgs" in
+					*" $p "*) ;;
+					*) family_pkgs+="$p " ;;
+				esac
+			done
+		done <<< "$records"
+		_MORPHE_AUTO_ARGS=""
+		while IFS=$'\t' read -r name pkgs; do
+			[ -z "$name" ] && continue
+			case "$name" in "$prefix"*) continue ;; esac
+			[[ "$pkgs" == *,* ]] && continue
+			case "$family_pkgs" in
+				*" $pkgs "*) _MORPHE_AUTO_ARGS+=" -d \"$name\"" ;;
+			esac
+		done <<< "$records"
+		_MORPHE_AUTO_KEY="$key"
+	fi
+	printf '%s' "$_MORPHE_AUTO_ARGS"
+}
+
+morphe_patch() {
+	local app="$1" options_key="$2" mode="$3" abi="$4"
+	local mpp_args="" mpp_file out="./release/$app-$options_key.apk"
+	local split_args="" continue_flag=" --continue-on-error" auto_args=""
+	local bundles=()
+
+	if [ -n "$abi" ]; then
+		split_args=" --striplibs $abi"
+		out="./release/$app-$abi-$options_key.apk"
+		continue_flag=""
+	fi
+
+	if [ "$mode" = "multi" ]; then
+		for mpp_file in *.mpp; do
+			[ -f "$mpp_file" ] || continue
+			mpp_args+=" -p \"$mpp_file\""
+			bundles+=("$mpp_file")
+		done
+	else
+		mpp_file=$(ls ./*.mpp 2> /dev/null | head -n1)
+		mpp_args=" -p \"$mpp_file\""
+		bundles+=("$mpp_file")
+	fi
+
+	if [ -n "$keepPrefix" ]; then
+		auto_args=$(morphe_auto_exclude "$keepPrefix" "${bundles[@]}") || return 1
+	fi
+
+	eval java -jar morphe-desktop-*.jar patch$mpp_args$excludePatches$includePatches$exclusivePatches$auto_args --options-file ./src/options/$options_key.json$split_args --keystore=./src/keystore/morphe.keystore --force$continue_flag --out="$out" ./download/$app.apk
+	return $?
+}
+
+patch() {
+	green_log "[+] Patching $1:"
+	if [ ! -f "./download/$1.apk" ]; then
+		red_log "[-] Not found $1.apk"
+		exit 1
+	fi
+
+	local patch_type
+	patch_type=$(patch_format)
+	if [ -z "$patch_type" ]; then
+		red_log "[-] No patch bundle found (*.mpp or *.reseam)"
+		exit 1
+	fi
+
+	echo "Patching with $patch_type"
+	unset CI GITHUB_ACTION GITHUB_ACTIONS GITHUB_ACTOR GITHUB_ENV GITHUB_EVENT_NAME GITHUB_EVENT_PATH GITHUB_HEAD_REF GITHUB_JOB GITHUB_REF GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_NUMBER GITHUB_SHA GITHUB_WORKFLOW GITHUB_WORKSPACE RUN_ID RUN_NUMBER
+	if [ "$patch_type" = "morphe" ]; then
+		morphe_patch "$1" "$2" single || { red_log "[-] Morphe patch failed: $1"; exit 1; }
+	else
+		reseam_patch "$1" "$2" single || { red_log "[-] Reseam patch failed: $1"; exit 1; }
+	fi
+	unset version
+	unset lock_version
+	unset excludePatches
+	unset includePatches
+	unset keepPrefix
+	unset exclusivePatches
+}
+
+patch_multi() {
+	green_log "[+] Patching $1:"
+	if [ ! -f "./download/$1.apk" ]; then
+		red_log "[-] Not found $1.apk"
+		exit 1
+	fi
+
+	local patch_type
+	patch_type=$(patch_format)
+	if [ -z "$patch_type" ]; then
+		red_log "[-] No patch bundle found (*.mpp or *.reseam)"
+		exit 1
+	fi
+
+	echo "Patching with $patch_type"
+	unset CI GITHUB_ACTION GITHUB_ACTIONS GITHUB_ACTOR GITHUB_ENV GITHUB_EVENT_NAME GITHUB_EVENT_PATH GITHUB_HEAD_REF GITHUB_JOB GITHUB_REF GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_NUMBER GITHUB_SHA GITHUB_WORKFLOW GITHUB_WORKSPACE RUN_ID RUN_NUMBER
+	if [ "$patch_type" = "morphe" ]; then
+		morphe_patch "$1" "$2" multi || { red_log "[-] Morphe patch failed: $1"; exit 1; }
+	else
+		reseam_patch "$1" "$2" multi || { red_log "[-] Reseam patch failed: $1"; exit 1; }
+	fi
+	unset version
+	unset lock_version
+	unset excludePatches
+	unset includePatches
+	unset keepPrefix
+	unset exclusivePatches
+}
+
+lspatch() {
+	green_log "[+] Patching $1:"
+	if [ -f "./download/$1.apk" ]; then
+		local module
+		if [[ "$2" == *.apk ]]; then
+			local -a matches=($2)
+			module="${matches[0]}"
+		else
+			module="$2.apk"
+		fi
+		if [[ ! -f "$module" ]]; then
+			red_log "[-] Module not found: $2"
+			return 1
+		fi
+		java -jar lspatch-*-release.jar ./download/$1.apk -k ./src/keystore/lspatch-signing.p12 "morphe" "fiorenmas" "morphe" $4 -m "$module" -o ./release/
+		mv ./release/$1-*-lspatched.apk ./release/$1-$3.apk
+		unset version
+		unset lock_version
+	else
+		red_log "[-] Not found $1.apk"
+		exit 1
+	fi
+}
+
+npatch() {
+	green_log "[+] Patching $1:"
+	if [ -f "./download/$1.apk" ]; then
+		local module
+		if [[ "$2" == *.apk ]]; then
+			local -a matches=($2)
+			module="${matches[0]}"
+		else
+			module="$2.apk"
+		fi
+		if [[ ! -f "$module" ]]; then
+			red_log "[-] Module not found: $2"
+			return 1
+		fi
+		java -jar jar*.jar ./download/$1.apk -k ./src/keystore/fiorenmas.ks "fiorenmas" "morphe" "fiorenmas" $4 -m "$module" -o ./release/
+		mv ./release/$1-*-npatched.apk ./release/$1-$3.apk
+		unset version
+		unset lock_version
+	else
+		red_log "[-] Not found $1.apk"
+		exit 1
+	fi
+}
+#################################################
+
+split_editor() {
+    if [[ -z "$3" || -z "$4" ]]; then
+        green_log "[+] Merge splits apk to standalone apk"
+        java -jar $APKEditor m -i "./download/$1" -o "./download/$1.apk" > /dev/null 2>&1
+        return 0
+    fi
+    IFS=' ' read -r -a include_files <<< "$4"
+    mkdir -p "./download/$2"
+    for file in "./download/$1"/*.apk; do
+        filename=$(basename "$file")
+        basename_no_ext="${filename%.apk}"
+        if [[ "$filename" == "base.apk" ]]; then
+            cp -f "$file" "./download/$2/" > /dev/null 2>&1
+            continue
+        fi
+        if [[ "$3" == "include" ]]; then
+            if [[ " ${include_files[*]} " =~ " ${basename_no_ext} " ]]; then
+                cp -f "$file" "./download/$2/" > /dev/null 2>&1
+            fi
+        elif [[ "$3" == "exclude" ]]; then
+            if [[ ! " ${include_files[*]} " =~ " ${basename_no_ext} " ]]; then
+                cp -f "$file" "./download/$2/" > /dev/null 2>&1
+            fi
+        fi
+    done
+
+    green_log "[+] Merge splits apk to standalone apk"
+    java -jar $APKEditor m -i ./download/$2 -o ./download/$2.apk > /dev/null 2>&1
+}
+
+#################################################
+
+archs=("arm64-v8a" "armeabi-v7a" "x86_64" "x86")
+libs=("armeabi-v7a x86_64 x86" "arm64-v8a x86_64 x86" "armeabi-v7a arm64-v8a x86" "armeabi-v7a arm64-v8a x86_64")
+
+# Remove unused architectures directly
+apk_editor() {
+	local apk="$1" keep="$2"; shift 2
+	local dir="./download/$apk"
+	rm -rf "$dir" && unzip -q "./download/$apk.apk" -d "$dir" || return 1
+	for r in "$@"; do rm -rf "$dir/lib/$r"; done
+	(cd "$dir" && zip -qr "../$apk-$keep.apk" .)
+}
+
+# Split architectures using Morphe cli or Reseam cli
+split_arch() {
+	local patch_type
+	patch_type=$(patch_format)
+	if [ ! -f "./download/$1.apk" ]; then
+		red_log "[-] Not found $1.apk"
+		exit 1
+	fi
+	green_log "[+] Splitting $1 to ${archs[i]}:"
+	if [ "$patch_type" = "morphe" ]; then
+		morphe_patch "$1" "$2" single "${archs[i]}" || { red_log "[-] Morphe split failed: $1"; exit 1; }
+	else
+		reseam_patch "$1" "$2" single "${archs[i]}" || { red_log "[-] Reseam split failed: $1"; exit 1; }
+	fi
+}
+
+#################################################
