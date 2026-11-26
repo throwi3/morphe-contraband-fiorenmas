@@ -3,7 +3,7 @@
 There are many open-source scripts for patching various apps like YouTube, YouTube Music... However, they are very difficult to use for most users. That's why I created this repository that allows users to download those apps easily.
 </h4>
 
-##  How does this repository work?
+###  How does this repository work?
 
 This repository does not create new releases; it only releases new files.
 
@@ -203,5 +203,3 @@ All the code is open-source, and the APK files used for patching are downloaded 
 [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) - [MIT](https://github.com/FlareSolverr/FlareSolverr/blob/master/LICENSE)
 
 [tdl](https://github.com/iyear/tdl) - [AGPL-3.0](https://github.com/iyear/tdl/blob/master/LICENSE)
-
----
