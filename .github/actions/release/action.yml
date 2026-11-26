@@ -9,6 +9,7 @@ runs:
         **This repository is not like any other repository. It does not create new releases; it only releases new files.**
         **Change log** :point_down:
         [HushTumblr](https://github.com/SysAdminDoc/HushTumblr/releases)
+        [Venus](https://github.com/VenusIsJaded/Venus-Patches/releases)
         [Reseam](https://github.com/Reseam/patches/releases)
         "> ${{ github.workspace }}-CHANGELOG.txt
     - name: Release
