@@ -1,2 +1,86 @@
+Hide ads
+Block video ads
+Reseam settings entry
+GmsCore support
+Hide layout components
+Hide settings menu items
 Hide Shorts components| -OhideShortsAppShortcut=true -OhideShortsWidget=true
+More double-tap seek lengths
+Copy video link
+Disable double-tap chapter jumps
+Disable haptic feedback
+Double-tap seek length
+Download Shorts
+External downloader
+Live rings open the channel
+Remove feed scroll speed limit
+Skip viewer discretion dialog
+Restore Cast Play/Queue dialog
+Save to device
+Search inside channels
+Seekbar
+Swipe controls
+Unlock downloads
+Unlock queue
+Alternative thumbnails
+Bypass image region restrictions
+Change form factor
+Change header
+Change start page
+Compact miniplayer
+Custom branding
+Disable ambient mode
+Disable fullscreen ambient mode
+Hide TV sign-in prompt
+Miniplayer
+Navigation bar
+Open videos fullscreen
+Return YouTube Dislike
+SponsorBlock
+Spoof app version
 Theme| -OmaterialYou=true
+Wide search bar
+Clearer offline account error
+Bypass link redirects
+Check watch history
+Disable autoplay in playlists
+Disable video codecs
+Feature flag overrides
+Loop video
+Open links in browser
+Pause on audio interrupt
+Clean share links
+Spoof device dimensions
+Fix playback
+Spoof user agent
+Captions language
+Play button size
+Player overlay opacity
+Disable auto captions
+Disable player popup panels
+Disable rolling number animations
+Hide autoplay preview
+Hide end screen cards
+Hide end screen suggestion
+Hide info cards
+Hide player menu items
+Hide player buttons
+Hide related videos overlay
+Hide timestamp
+Hide video action buttons
+Dim Shorts overlay
+Disable resuming Shorts
+Play Shorts as regular videos
+Shorts autoplay
+Stay paused
+Force original audio
+Background playback
+Video quality
+Advanced video quality menu
+Hide Premium video quality
+Remember video quality
+Video quality button
+Custom playback speed
+Playback speed button
+Playback speed
+Remember playback speed
